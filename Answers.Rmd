@@ -1,0 +1,1477 @@
+---
+title: 'GEOGM0053: Midterm'
+author: 'LucWilson'
+date: '2024-03-04'
+output: 
+  html_document:
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# setting working directoty
+#setwd('C:/Users/ni20171/OneDrive - University of Bristol/Msc Geographic Data Science & Spatial #Analytics/Machine Learning/MidTerm')
+```
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk loads required libraries:*</p>
+```{r, warning = FALSE, message = FALSE}
+# loading required packages
+library(tidyverse) 
+library(gridExtra) # for plotting histograms in a grid
+library(car) # for vif()
+library(caret) # for model training
+library(randomForest) # for random forest
+library(rpart) # for decision tree
+library(rpart.plot) # for plotting decision trees
+library(kableExtra) # for editing kables
+library(vip) # for kknn variable importance
+```
+
+<hr style='border: 1px solid #333;'>
+
+# Regression: What are the most important factors governing the popularity of a dog breed?
+
+<hr style='border: 1px solid #333;'>
+
+### Q1.a
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk reads in data:*</p>
+```{r, warning = FALSE, message = FALSE}
+# reading in the data (using tidyverse read_csv over base read.csv)
+dogs = read_csv('midterm-data.csv')
+head(dogs)
+```
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk makes train and test data sets:*</p>
+```{r, message=FALSE}
+# splitting the data into training and testing sets
+set.seed(1)
+
+train = dogs %>%
+  sample_frac(0.6) # small data set so using 60-40 split so that test data isn't too small
+
+test = anti_join(dogs, train)
+```
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk makes histograms to examine feature normality:*</p>
+```{r, fig.align='center'}
+# visually examining the normality of variables with histograms (assumption of linear regression)
+
+# getting names of numeric columns
+numeric_cols = c(dogs %>%
+  select_if(is.numeric) %>% 
+  colnames())
+
+# creating tibble with selected columns
+numeric_dogs = dogs[numeric_cols]
+
+# creating an empty list to store plots for grid.arrange()
+histograms = list()
+
+# setting plot size
+plot_size = 3
+
+# looping through columns to plot histograms in a grid
+for (col in numeric_cols) {
+  p = ggplot(data = numeric_dogs, aes(x = .data[[col]])) +
+    geom_histogram(fill = 'lightblue', 
+                   color = 'black', # make bins clear
+                   bins = 5 # lots of features are categorical 1-5
+                   ) +
+    ggtitle(col) + # making the titles the column names
+    theme_minimal() +
+    theme(plot.margin = ggplot2::margin(5, 5, 5, 5, 'pt'), # spacing the plots
+          plot.title = element_text(size = 9, # title sizes
+                                    hjust = 0.5 # centering titles
+                                    ) 
+  ) +
+    xlab(NULL) # hiding x axis labels (same as titles)
+  # appending list with plots
+  histograms[[length(histograms) + 1]] = p 
+}
+
+# Arrange plots in a grid and print
+grid.arrange(grobs = histograms, # using list created above
+             ncol = 4, # so its 4x4
+             width = plot_size * 3, # setting plotting proportions
+             height = plot_size * 5
+             )
+```
+
+'editors_choice' is especially non-normal (categorical 1 or 0) which violates the assumptions of linear regression so it will be omitted.
+
+Others factors which are especially non-normal: 'affection' (could be log-transformed) and 'good_with_young_children':
+
+- since these features are categorical within the range of 1-5 it is not appropriate to apply a transformation. They will be included in the initial model to evaluate their importance but their non-normality means they significantly violate the assumptions of linear regression. 
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk constructs initial linear model:*</p>
+```{r}
+# making initial linear model
+# using whole data set minus: 'editors_choice', 'coat_type', 'coat_length', 'breed_clean'
+lm_1a1 = lm(popularity ~ 
+              affection +
+              good_with_young_children +
+              good_with_other_dogs +
+              shedding +
+              grooming_needs +
+              drool +
+              openness_to_strangers +
+              playfulness +
+              protectiveness +
+              adaptability +
+              trainability_level +
+              energy +
+              barking +
+              mental_stimulation_needs,
+            data = dogs)
+# printing model summary
+summary(lm_1a1)
+```
+
+<hr style='border: 1px solid #333;'>
+
+### 1.b.
+
+Looking at the model (lm_1a1) summary:
+
+- The only variables significant to 95%: 'grooming_needs', 'playfulness', 'protectiveness', 'barking'
+- The variables significant to 90% (not 95): 'drool', 'openness_to_strangers'
+
+Using the whole data set for identifying useful features:
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk makes next linear model:*</p>
+```{r}
+# further investigating linear model with only variables significant to +90%
+lm_1a2 = lm(popularity ~ 
+              grooming_needs + 
+              openness_to_strangers +
+              playfulness +
+              protectiveness +
+              barking +
+              drool,
+   data = dogs)
+# printing model summary
+summary(lm_1a2)  
+# printing multicollinearity
+vif(lm_1a2)
+```
+
+- 'openness_to_strangers' no longer significant so it is being removed.
+- 'drool' is only significant to 90%, so it is being removed too.
+ 
+ The next model will use the remaining features.
+ 
+ Now there are fewer terms, looking to see if there are any useful interaction terms:
+ 
+ <p class='text-right' style='background-color: #f5fbff'>*Code chunk makes next linear model with interaction terms:*</p>
+```{r}
+# examining interactions now
+lm_1a3 = lm(popularity ~ 
+              grooming_needs *
+              playfulness *
+              protectiveness *
+              barking,
+   data = dogs)
+# printing model summary
+summary(lm_1a3)
+```
+
+'grooming_needs:protectiveness:barking' and 'grooming_needs:barking' are significant to 95% so investigating this further.
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk makes next linear model, testing the significant interaction terms:*</p>
+```{r, warning=FALSE, message=FALSE}
+# creating new linear model with the additional interaction terms
+lm_1a4 = lm(popularity ~ 
+              grooming_needs +
+              playfulness +
+              protectiveness +
+              barking +
+              grooming_needs:protectiveness:barking +
+              grooming_needs:barking,
+   data = dogs)
+# printing model summary
+summary(lm_1a4)
+# checking multicollinearity
+vif(lm_1a4)
+```
+
+- Adjusted R squared has increased (from lm_1a2:0.1844 to lm_1a4:0.2425)
+- Interaction terms are high significance.
+
+As expected, collinearity has increased. Generally VIF>6 is considered unacceptable. 
+
+The only way to lower the VIF of the interaction terms is to have them without the original terms. Investigating to see how this model would perform:
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk makes next linear model:*</p>
+```{r, message=FALSE}
+# creating new linear model without base terms for interaction terms to test if this is better
+lm_1a5 = lm(popularity ~
+              playfulness +
+              grooming_needs:barking +
+              grooming_needs:protectiveness:barking,
+   data = dogs)
+# printing model summary
+summary(lm_1a5)
+# checking multicollinearity
+vif(lm_1a5)
+```
+
+- The adjusted R squared drops significantly. 
+- To keep the multicollinearty (VIF scores) acceptable the model performs worse. 
+- Therefore removing the interaction terms.
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk makes final linear model:*</p>
+```{r}
+# regenerating lm_1a2 without 'drool' and 'openness_to_strangers'
+lm_1a6 = lm(popularity ~ 
+              grooming_needs +
+              playfulness +
+              protectiveness +
+              barking,
+   data = dogs)
+# printing model summary
+summary(lm_1a6)
+# checking multicollinearity
+vif(lm_1a6)
+```
+
+##### All features are now significant (95%), and non-collinear (VIF<1.1). 
+##### Therefore the most useful features to predict the popularity of a dog breed are:
+
+- grooming_needs
+- playfulness
+- protectiveness
+- barking
+
+<hr style='border: 1px solid #333;'>
+
+### 1.c.
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk fits linear model to training data:*</p>
+```{r}
+# fitting to the training data set
+lm_1c = lm(popularity ~ grooming_needs +
+              playfulness +
+              protectiveness +
+              barking,
+   data = train)
+# printing model summary
+summary(lm_1c)
+# checking multicollinearity
+vif(lm_1c)
+```
+
+- significance scores have changed significantly: symptom of small, variable data set 
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk gets out-of-sample predictions:*</p>
+```{r}
+# applying lm_1c to test data for cross validation:
+test_predictions = predict(lm_1c, newdata = test)
+```
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk makes function to calculate mean squared error (MSE):*</p>
+```{r}
+# defining MSE function
+MSE = function(actual, predicted) {
+  mse = mean((actual - predicted)^2)
+  return(mse)
+}
+```
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk calculates, and prints, the out-of-sample MSE, R squared, and adjusted R squared for the linear model:*</p>
+```{r}
+# using MSE function to calculate MSE of lm_1c
+mse_lm_1c = MSE(actual = test$popularity, 
+                 predicted = test_predictions)
+cat('The out-of-sample mean squared error (MSE) is: ', mse_lm_1c, '\n')
+
+# getting out-f-sample adjusted R squared for lm_1c
+out_of_samp_Rsq = 1 - sum((test$popularity - 
+                                     test_predictions)^2) /
+  sum((test$popularity - 
+         mean(test$popularity))^2)
+
+# adjusting R squared for data size:
+n = nrow(test) # number of rows
+k = 4 # number of features
+
+# getting adjusted R squared (more useful for comparing models with different number of features)
+out_of_samp_adj_Rsq = 1 - ((1 - out_of_samp_Rsq) * (n - 1) / (n - k - 1))
+
+# printing answers 
+# (question specifies R squared but I will use adjusted R squared for model comparisons so printing both)
+cat('The out-of-sample R squared is:', out_of_samp_Rsq, 'and the adjusted out-of-sample R squared is: ',out_of_samp_adj_Rsq, '\n')
+```
+
+<hr style='border: 1px solid #333;'>
+
+### 1.d.
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk adds 'is_terrier' to the data:*</p>
+```{r}
+# creating 'is_terrier' variable (one-hot encoded)
+dogs$is_terrier = as.integer(grepl('Terrier', dogs$breed_clean))
+
+# doing for test and train too
+train$is_terrier = as.integer(grepl('Terrier', train$breed_clean))
+test$is_terrier = as.integer(grepl('Terrier', test$breed_clean))
+
+```
+
+The initial check for bias is a visual examination of residuals: (I am looking to see if the residuals of 'is_terrier' points are different)
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk generates colour-coded plot of residuals, by 'is_terrier' feature:*</p>
+```{r, fig.align='center'}
+# getting residuals for lm_1c
+resid_lm_1c = residuals(lm_1c)
+
+# making data frame for plotting
+resid_lm_1c_1d = data.frame(residuals = resid_lm_1c, 
+                            is_terrier = factor(train$is_terrier), # categorical
+                            popularity = train$popularity)
+
+# Creating a plot of residuals colour-coded by is_terrier
+ggplot(resid_lm_1c_1d, aes(x = popularity, y = residuals, color = is_terrier)) +
+  geom_point() +
+  geom_hline(yintercept = 0, # adding line where residuals should centre around
+             linetype = 'dashed', 
+             color = 'black') +
+  labs(x = 'Popularity', 
+       y = 'Residuals', 
+       title = 'Plot of Residuals (colour-coded by is_terrier)') +
+  theme_minimal() +
+  scale_x_continuous(breaks = seq(min(as.numeric(resid_lm_1c_1d$popularity)), 
+                                max(as.numeric(resid_lm_1c_1d$popularity)),
+                                length.out = 8),
+                     labels = scales::number_format(accuracy = 0.01)) + # rounding x-axis labels to 2dp
+                     scale_color_manual(values = c("orange", "skyblue"))  +
+  theme(plot.title = element_text(hjust = 0.5))  # centering title
+  
+```
+
+- There is obvious bias in the residuals (over predicting high popularities and under predicting low popularities)
+- BUT this bias does not appear to be connected to 'is_terrier'. 
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk regenerates the linear model with 'is_terrier' added:*</p>
+```{r}
+# no obvious bias with is_terrier in the model.
+# adding is_terrier to the model to see any changes
+lm_1d = lm(popularity ~ grooming_needs +
+              playfulness +
+              protectiveness +
+              barking +
+             is_terrier,
+   data = train)
+summary(lm_1d)
+vif(lm_1d)
+# r2 has dropped slightly
+```
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk generates out-of-sample MSE and R squared of the new linear model:*</p>
+```{r}
+# checking MSE
+test_predictions_1d = predict(lm_1d, newdata = test)
+
+mse_lm_1d = MSE(actual = test$popularity, 
+                 predicted = test_predictions_1d)
+cat('The out-of-sample mean squared error (MSE) is:', mse_lm_1d, '\n')
+
+# getting out of sample R squared
+out_of_samp_Rsq_1d = 1 - sum((test$popularity - 
+                                     test_predictions_1d)^2) /
+  sum((test$popularity - 
+         mean(test$popularity))^2)
+
+# adjusting R squared for data size:
+n = nrow(test) # number of rows
+k = 5 # number of features
+
+out_of_samp_adj_Rsq_1d = 1 - ((1 - out_of_samp_Rsq_1d) * (n - 1) / (n - k - 1))
+
+cat('The out-of-sample adjusted R squared is:', out_of_samp_adj_Rsq_1d, '\n')
+```
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk generates a results table to compare model performances with and without 'is_terrier' feature:*</p>
+```{r}
+# making kable to compare with and without is_terrier models MSE and R squared
+
+# making dataframe to store model results
+regression_results = data.frame(
+  Model = c('lm_1c', 'lm_1d'),
+  OutofSample_MSE = c(mse_lm_1c, mse_lm_1d),
+  OutofSample_Adj_R_squared = c(out_of_samp_adj_Rsq, out_of_samp_adj_Rsq_1d)
+)
+# rounding values to 4dp
+regression_results$OutofSample_MSE = sprintf('%.4f', regression_results$OutofSample_MSE)
+regression_results$OutofSample_Adj_R_squared = sprintf('%.4f', regression_results$OutofSample_Adj_R_squared)
+
+# making kable
+kable(regression_results, 
+      caption = NULL,
+      col.names = c('Model', 'Out-of-Sample MSE', 'Out-of-Sample Adjusted R squared'),
+      align = 'c', 
+      format = 'html',
+      table.attr = 'style="width:60%;margin:auto;"'   # centering kable
+)%>%
+  kable_styling(bootstrap_options = c('bordered'))
+```
+
+There was no visual differences between the predictions of 'is_terrier' dogs and the other data points AND there was no significant change in model MSE. There was a slight change in Out-of-Sample Adjusted R squared however the values are close to 0 (<0.11) so the change is not regarded as significant. 
+
+##### The conclusion is therefore that there is no model bias against terriers. 
+
+- Conceptually, there could have been a difference if the popularity of terrier dogs is determined differently to the mean of how other breeds.
+- For example: if terrier dogs have a reputation for being dangerous then the playfulness variable might act differently for them etc. 
+
+
+<hr style='border: 1px solid #333;'>
+
+### 2.a.
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk subsets data to only the identified 'useful' features:*</p>
+```{r}
+# sub-setting specific columns
+cols_2a = c('popularity', 
+            'grooming_needs',
+              'playfulness',
+              'protectiveness',
+              'barking')
+dogs_2a = dogs[, cols_2a]
+```
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk regenerates test and train data with the subsetted data set:*</p>
+```{r, message=FALSE}
+# making test and training data of dogs_2a df
+set.seed(1)
+
+train_2a = dogs_2a %>%
+  sample_frac(0.6)
+
+test_2a = anti_join(dogs_2a, train_2a)
+```
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk sets a control parameter for model cross validation:*</p>
+```{r}
+# setting control parameters for cross validation
+ctrl = trainControl(method = 'cv', number = 5, verboseIter = FALSE)
+```
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk fits random forest model:*</p>
+```{r}
+# fitting random forest (training data)
+rf_2a = train(popularity ~ grooming_needs+
+              playfulness+
+              protectiveness+
+              barking, 
+              data = train_2a, 
+              method = 'rf', 
+              trControl = ctrl,
+              ntree = 1000)
+rf_2a
+```
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk generates out-of-sample MSE for random forest model:*</p>
+```{r}
+# getting predictions from rf_2a
+predictions_2a = predict(rf_2a, newdata = test_2a)
+
+# getting the MSE of rf_2a
+rf_2a_MSE = MSE(actual = test_2a$popularity, 
+                 predicted = predictions_2a)
+
+# getting R squared
+rsquared_2a <- 1 - sum((test_2a$popularity - predictions_2a)^2) / sum((test_2a$popularity - mean(test_2a$popularity))^2)
+cat('The out-of-sample R squared is:', rsquared_2a, '\n')
+
+# adjusting R squared for data size:
+n = nrow(test_2a) # number of rows
+k = 4 # number of features
+
+out_of_samp_adj_Rsq_2a = 1 - ((1 - rsquared_2a) * (n - 1) / (n - k - 1))
+cat('The out-of-sample adjusted R squared is:', out_of_samp_adj_Rsq_2a, '\n')
+```
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk appends result table to include the random forest model:*</p>
+```{r}
+# appending results data frame
+regression_results = rbind(regression_results, c('rf_2a', rf_2a_MSE, out_of_samp_adj_Rsq_2a))
+
+# resetting as numeric
+regression_results$OutofSample_MSE = as.numeric(regression_results$OutofSample_MSE)
+regression_results$OutofSample_Adj_R_squared = as.numeric(regression_results$OutofSample_Adj_R_squared)
+
+# setting to 4dp
+regression_results$OutofSample_MSE = sprintf('%.4f', regression_results$OutofSample_MSE) 
+regression_results$OutofSample_Adj_R_squared = sprintf('%.4f', regression_results$OutofSample_Adj_R_squared)
+
+# making updated kable
+kable(regression_results, 
+      caption = NULL,
+      col.names = c('Model', 'Out-of-Sample MSE', 'Out-of-Sample Adjusted R squared'),
+      align = 'c', 
+      format = 'html',
+      table.attr = 'style="width:60%;margin:auto;"' ) %>% # centring kable
+  kable_styling(bootstrap_options = c('bordered'))
+```
+
+
+<hr style='border: 1px solid #333;'>
+
+### 2.b.
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk prints the importance of the variables in the random forest model:*</p>
+```{r, message=FALSE}
+# checking variable importance
+var_importance = varImp(rf_2a)
+# Print variable importance
+print(var_importance)
+```
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk prints the importance of the variables in the linear model:*</p>
+```{r}
+# printing for linear model too, for comparison
+var_importance_lm_1c = varImp(lm_1c)
+print(var_importance_lm_1c)
+```
+
+The variable importance is not the same between the linear model (lm_1c) and the random forest model (rf_2a). The 'best' predictor for the random forest model was 'barking' whereas the most 'best' predictor for the linear model was 'playfulness.' 
+
+The two models did agree that 'grooming_needs' was the 'worst' predictor of those used. 
+
+<hr style='border: 1px solid #333;'>
+
+### 2.c.
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk regenerates training and test data with 'is_terrier' added:*</p>
+```{r, message=FALSE}
+# before recreating rf_2a with is_terrier to compare out of sample MSEs:
+
+# first adding is_terrier to training data
+cols_2c = c('popularity', 
+            'grooming_needs',
+              'playfulness',
+              'protectiveness',
+              'barking',
+            'is_terrier')
+dogs_2c = dogs[, cols_2c]
+
+# using the same seed
+set.seed(1)
+
+train_2c = dogs_2c %>%
+  sample_frac(0.6) # small data set so using 60-40 split so that test data isn't too small
+
+test_2c = anti_join(dogs_2c, train_2c)
+```
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk regenerates random forest model with additional 'is_terrier' term:*</p>
+```{r}
+# recreating rf_2a with is_terrier to compare out of sample MSEs
+rf_2c = train(popularity ~ grooming_needs+
+              playfulness+
+              protectiveness+
+              barking +
+              is_terrier, 
+              data = train_2c, 
+              method = 'rf', 
+              trControl = ctrl,
+              ntree = 1000)
+print(rf_2c)
+```
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk generates out-of-sample MSE and R squared for new random forest model:*</p>
+```{r}
+# getting out of sample MSE for rf_2a
+predictions_2c = predict(rf_2c, newdata = test_2c)
+
+mse_rf_2c = MSE(actual = test_2c$popularity, 
+                 predicted = predictions_2c)
+cat('The out-of-sample mean squared error (MSE) is:', mse_rf_2c, '\n')
+
+# getting R squared
+rsquared_2c <- 1 - sum((test_2c$popularity - predictions_2c)^2) / sum((test_2c$popularity - mean(test_2c$popularity))^2)
+cat('The out-of-sample R squared is:', rsquared_2c, '\n')
+
+# adjusting R squared for data size:
+n = nrow(test_2c) # number of rows
+k = 5 # number of features
+
+out_of_samp_adj_Rsq_2c = 1 - ((1 - rsquared_2c) * (n - 1) / (n - k - 1))
+cat('The out-of-sample adjusted R squared is:', out_of_samp_adj_Rsq_2c, '\n')
+```
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk appends results table to include the new random forest model:*</p>
+```{r, warning=FALSE}
+# appending results data frame
+regression_results = rbind(regression_results, c('rf_2c', mse_rf_2c, out_of_samp_adj_Rsq_2c))
+
+# resetting as numeric
+regression_results$OutofSample_MSE = as.numeric(regression_results$OutofSample_MSE)
+regression_results$OutofSample_Adj_R_squared = as.numeric(regression_results$OutofSample_Adj_R_squared)
+
+# Format the numeric columns
+regression_results$OutofSample_MSE = sprintf('%.4f', regression_results$OutofSample_MSE)
+regression_results$OutofSample_Adj_R_squared = sprintf('%.4f', regression_results$OutofSample_Adj_R_squared)
+
+# making updated kable
+kable(regression_results, 
+      caption = NULL,
+      col.names = c('Model', 'Out-of-Sample MSE', 'Out-of-Sample Adjusted R squared'),
+      align = 'c', 
+      format = 'html',
+      table.attr = 'style="width:60%;margin:auto;"'   # centring kable
+)%>%
+  kable_styling(bootstrap_options = c('bordered'))
+```
+
+
+The changes in MSE between rf_2a and rf_2c are insignificant. The addition of 'is_terrier' did not improve the model performance.
+
+There is no indication that the random forest model was not biased against terriers. To further validate this I am bootstrapping the models to compare performance distributions to determine if one model tend to perform better then the other or not.
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk regenerates random forest models using bootstrapping (instead of cross validation):*</p>
+```{r}
+# using bootstrapping to find probability that the change in model performance was random
+
+# setting bootstrapping control
+ctrl_boot = trainControl(method = 'boot', number = 500)
+
+rf_2a_boot = train(popularity ~ 
+                     grooming_needs+
+              playfulness+
+              protectiveness+
+              barking, 
+              data = train_2a, 
+              method = 'rf', 
+              trControl = ctrl_boot,
+              ntree = 1000)
+
+rf_2c_boot = train(popularity ~ 
+                     grooming_needs+
+              playfulness+
+              protectiveness+
+              barking +
+              is_terrier, 
+              data = train_2c, 
+              method = 'rf', 
+              trControl = ctrl_boot,
+              ntree = 1000)
+```
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk stores the resampled MSEs for both models:*</p>
+```{r}
+# getting MSEs of models
+boot_MSE_rf_2a = (rf_2a_boot$resample$RMSE)^2
+boot_MSE_rf_2c = (rf_2c_boot$resample$RMSE)^2
+
+# making data frame of accuracies from both models
+boot_accuracies_df = data.frame(Model = rep(c('rf_2a', 'rf_2c'), each = length(boot_MSE_rf_2a)),
+                             MSE = c(boot_MSE_rf_2a, boot_MSE_rf_2c))
+
+```
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk creates histogram to compare the distribution of the resampled MSEs:*</p>
+```{r, fig.align='center'}
+# plotting both histograms together
+ggplot(boot_accuracies_df, aes(x = MSE, fill = Model)) +
+  geom_histogram(binwidth = 0.005, 
+                 position = 'identity',
+                 alpha = 0.6,
+                 color = 'black') +
+  labs(title = 'Comparision of Model MSEs',
+       x = 'MSE',
+       y = 'Frequency') +
+  scale_fill_manual(values = c('rf_2a' = 'orange', 
+                               'rf_2c' = 'skyblue')) +  # Adjust colors as needed
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5)) 
+```
+
+The figure shows no difference in MSEs between the random forest model trained with 'is_terrier' (rf_2c) and the model trained without (rf_2a). So I am confident the change in model performance between rf_2a (without 'is_terrier') and rf_2c (with 'is_terrier') occurred by random chance. 
+
+##### Therefore the original random forest model was not biased against terriers.
+
+<hr style='border: 1px solid #333;'>
+
+### 3.a.
+
+Conceptually, a K-Nearest Neighbours (KNN) model might be inappropriate for the research question:
+
+- 'What are the most important factors governing the popularity of a dog breed?'
+
+because we are interested in learning about the features. KNN models only use a simplistic 'distance' measure to make predictions. This is significantly less interpretable than a random forest would be where variables can be ranked by importance or even a decision tree where variable importance can be deciphered from the depth of the tree.
+
+Furthermore, the 'distances' in KNN here would be calculated on variables which are categorical of 1,2,3,4, or 5. Practically, this means the 'distances' calculated by the KNN model would frequently be identical (for a large data set) and have steps between them. 
+
+Additionally, KNN models can perform less well with high dimensional data, in this instance there were 13 numeric features initially (12 without editors choice) which would cause a KNN model to perform worse however there were only 4 features selected in 1b which would mitigate this concern.
+
+<hr style='border: 1px solid #333;'>
+
+### 3.b.
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk constructs a KNN model (K=10):*</p>
+```{r}
+# constructing KNN model (k=10) on training data
+knn_3b = train(popularity ~ grooming_needs+
+              playfulness+
+              protectiveness+
+              barking,
+              data = train, 
+              method = 'knn', 
+              trControl = ctrl, 
+              preProcess = c('center', # centering (subtracting the mean)
+                             'scale'), # scaling (dividing every point by the standard deviation)
+              tuneGrid = expand.grid(k = 10)) # setting k = 10
+```
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk generates out-of-sample MSE for KNN model:*</p>
+```{r}
+# getting out of sample predictions
+predictions_3b = predict(knn_3b, newdata = test)
+
+# getting out of sample MSE
+mse_knn_3b = MSE(actual = test$popularity, 
+                 predicted = predictions_3b)
+
+# getting R squared
+rsquared_3b <- 1 - sum((test$popularity - predictions_3b)^2) / sum((test$popularity - mean(test$popularity))^2)
+cat('The out-of-sample R squared is:', rsquared_3b, '\n')
+
+# adjusting R squared for data size:
+n = nrow(test) # number of rows
+k = 4 # number of features
+
+out_of_samp_adj_Rsq_3b = 1 - ((1 - rsquared_3b) * (n - 1) / (n - k - 1))
+
+```
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk appends results table with KNN model out-of-sample MSE:*</p>
+```{r}
+# appending results data frame
+regression_results = rbind(regression_results, c('knn_3b', mse_knn_3b, out_of_samp_adj_Rsq_3b))
+
+# resetting as numeric
+regression_results$OutofSample_MSE = as.numeric(regression_results$OutofSample_MSE)
+regression_results$OutofSample_Adj_R_squared = as.numeric(regression_results$OutofSample_Adj_R_squared)
+
+# Format the numeric columns
+regression_results$OutofSample_MSE = sprintf('%.4f', regression_results$OutofSample_MSE)
+regression_results$OutofSample_Adj_R_squared = sprintf('%.4f', regression_results$OutofSample_Adj_R_squared)
+
+# making updated kable
+kable(regression_results, 
+      caption = NULL,
+      col.names = c('Model', 'Out-of-Sample MSE', 'Out-of-Sample Adjusted R squared'),
+      align = 'c', 
+      format = 'html',
+      table.attr = 'style="width:60%;margin:auto;"'   # centring kable
+)%>%
+  kable_styling(bootstrap_options = c('bordered'))
+```
+
+<hr style='border: 1px solid #333;'>
+
+### 3.c.
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk tests different k values to find improved range:*</p>
+```{r}
+# visually examining MSEs with elbow curve to find better k value
+
+# setting k values for testing
+k_values = c(2, 3, 4, 5, 7, 8, 9, 10, 15, 20, 25, 30, 50)
+
+# making dataframe to store results
+knn_3c_results = data.frame(k = numeric(length(k_values)), MSE = numeric(length(k_values)))
+
+# creating loop to store MSE values for each k 
+for (i in seq_along(k_values)) {
+  k = k_values[i]
+  
+  # Train the KNN model
+  model_3c = train(popularity ~ grooming_needs + 
+                      playfulness + 
+                      protectiveness + 
+                      barking,
+                 data = train,
+                 method = 'knn',
+                 trControl = ctrl,
+                 preProcess = c('center', 'scale'),
+                 tuneGrid = expand.grid(k = k))
+  
+  # Make predictions on the test set
+  predictions_3c = predict(model_3c, newdata = test)
+  
+  # Calculate Mean Squared Error (MSE)
+  mse = MSE(actual = test$popularity, 
+                 predicted = predictions_3c)
+  
+  # Store results in the data frame
+  knn_3c_results[i, ] = c(k, mse)
+}
+
+```
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk plots 'elbow-curve' for KNN model:*</p>
+```{r, fig.align='center'}
+# plotting elbow curve of MSE vs K
+ggplot(knn_3c_results, aes(x = k, y = MSE)) +
+  geom_point() +  # Add points for the scatter plot
+  geom_smooth(method = 'loess', se = FALSE, span = 0.8) +
+  theme_minimal() +
+  scale_y_reverse() # reversing y scale for aesthetics 
+```
+visually k = 20 appears the best, so i will use a range around this. 
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk finds improved KNN model paramters by testing different weight functions and distance values within improved K value range:*</p>
+```{r}
+# Training KNN model on different weight functons around optimal k value
+# using whole data because of caret's 5 fold cross validation
+weights_model_3c = train(
+    popularity ~ grooming_needs +
+      playfulness +
+      protectiveness +
+      barking,
+    data = dogs, # using whole data set because caret cross validates
+    method = 'kknn',
+    trControl = ctrl,
+    preProcess = c('center', 'scale'),
+    tuneGrid = expand.grid(kmax = 15:25, # testing around k = 20
+                           distance = 15:30,
+                        kernel = c('gaussian',  # different weighting types in kknn
+                               'triangular',
+                               'rectangular',
+                               'epanechnikov',
+                               'cos',
+                               'optimal'))
+  )
+
+# optimal: 
+# Fitting kmax = 20, distance = 17, kernel = gaussian on full training set
+```
+
+Optimal: Fitting kmax = 20, distance = 17, kernel = gaussian on full training set
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk generates KNN model using improved K, distance, and weight function, and cross validation control:*</p>
+```{r}
+# constructing final KNN model using optimised parameters
+final_knn_3c = train(
+    popularity ~ grooming_needs +
+      playfulness +
+      protectiveness +
+      barking,
+    data = dogs,
+    method = 'kknn',
+    trControl = ctrl,
+    preProcess = c('center', 'scale'),
+    tuneGrid = expand.grid(kmax = 20, # testing around k = 20
+                           distance = 17,
+                        kernel = 'gaussian')
+  )
+
+# printing MSE and R squared
+cat('final_knn_3c MSE:', final_knn_3c$results$RMSE^2, '\n')
+cat('final_knn_3c R squared:', final_knn_3c$results$Rsquared, '\n')
+
+# adjusting R squared for data size:
+n = nrow(dogs) # number of rows
+k = 4 # number of features
+
+adj_Rsq_final_knn_3c = 1 - ((1 - final_knn_3c$results$Rsquared) * (n - 1) / (n - k - 1))
+
+cat('final_knn_3c adjusted R squared:', adj_Rsq_final_knn_3c, '\n')
+```
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk appends results table with improved KNN model out-of-sample MSE:*</p>
+```{r, warning=FALSE}
+# appending results data frame
+regression_results = rbind(regression_results, c('final_knn_3c', final_knn_3c$results$RMSE^2, adj_Rsq_final_knn_3c))
+
+# resetting as numeric
+regression_results$OutofSample_MSE = as.numeric(regression_results$OutofSample_MSE)
+regression_results$OutofSample_Adj_R_squared = as.numeric(regression_results$OutofSample_Adj_R_squared)
+
+# Format the numeric columns
+regression_results$OutofSample_MSE = sprintf('%.4f', regression_results$OutofSample_MSE)
+regression_results$OutofSample_Adj_R_squared = sprintf('%.4f', regression_results$OutofSample_Adj_R_squared)
+
+# making updated kable
+kable(regression_results, 
+      caption = NULL,
+      col.names = c('Model', 'Out-of-Sample MSE', 'Out-of-Sample Adjusted R squared'),
+      align = 'c', 
+      format = 'html',
+      table.attr = 'style="width:60%;margin:auto;"'   # centring kable
+)%>%
+  kable_styling(bootstrap_options = c('bordered'))
+```
+
+<hr style='border: 1px solid #333;'>
+
+### 4.
+
+final_knn_3c performed the best. It has the highest adjusted R squared and the lowest MSE. So I am looking to see its variable importances:
+
+```{r}
+# retrieving the variable importances from  final_knn_3c with permutations
+
+fitted_final_knn_3c <- final_knn_3c$finalModel
+
+# making prediction function for pred_wrapper argument
+predict_function <- function(model, newdata) {
+  predict(model, newdata = newdata)
+}
+
+# Compute variable importances using the vip package
+importance <- vip::vi(fitted_final_knn_3c, 
+                      method = "permute", 
+                      train = dogs, 
+                      target = dogs$popularity, 
+                      metric = "rmse", # using rmse for metric
+                      smaller_is_better = TRUE, # lower rmse is better
+                      pred_wrapper = predict_function)
+
+# Print the variable importances
+print(importance)
+```
+
+'playfulness' is the most important feature here. With 'grooming_needs' second, 'barking' third, and 'protectiveness' fourth. 
+
+Given the model scores, no I do not believe the model is good at predicting the popularity of dogs. The adjusted R squareds for all the models were low (<0.2), this was the just best option of those models. 
+
+I think this is due to the variable nature of the data, the non continuous nature of the data, and the small size of the data. 
+
+<hr style='border: 1px solid #333;'>
+
+# Classification: 'How can you tell if a dog is an 'Editor's choice?'
+
+<hr style='border: 1px solid #333;'>
+
+### 1.a.
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk fits decision tree model:*</p>
+```{r, warning=FALSE}
+# making decision tree with minimum leaf size of 10
+
+# making new ctrl object with arguments for decision trees
+ctrl_1a = trainControl(method = 'cv',
+                     number = 5,
+                     classProbs = TRUE, # to calculate class probabilities
+                     summaryFunction = twoClassSummary,
+                     # should weight true positive and negatives equally
+                     verboseIter = FALSE, 
+                     savePredictions = 'final' # storing performance for each fold for examining
+                     )
+
+# setting editors_choice as a factor for classification
+dogs$factor_editors_choice = as.factor(dogs$editors_choice)
+dogs$factor_editors_choice = factor(make.names(as.character(dogs$factor_editors_choice)))
+
+# using the whole data because of cross validation in control method
+tree_1a_c = caret::train(
+  x = dogs[, c('grooming_needs', 
+               'playfulness', 
+               'protectiveness',
+               'barking',
+               'popularity')],
+  y = dogs$factor_editors_choice,
+  method = 'rpart',
+  trControl = ctrl_1a,
+  tuneLength = 10, # sets how many different values for the main parameter
+  control = rpart::rpart.control(minbucket = 10) # minimum leaf size
+  )
+# rpart uses ROC instead of accuracy to optimise
+
+# setting no other constraints (eg. tuneGrid, cp range etc) to let caret train find optimal 
+tree_1a_c
+
+tree_1a_c$final
+```
+
+<hr style='border: 1px solid #333;'>
+
+### 1.b.
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk prints decision tree:*</p>
+```{r, fig.align='center'}
+rpart.plot(tree_1a_c$finalModel) 
+```
+
+In plain language, here is the decision tree route to the terminal node which predicts a dog is an editor's choice:
+
+The data is first split on the condition of whether popularity score less than 0.87. If the popularity score is greater than, or equal to, 0.87, then the data is split again on the condition of 'is the grooming score greater than, or equal to, 3'. If this condition is not met, then the data is split again on the condition 'is the popularity score greater than or equal to 0.92'. If this condition is not met, then the dogs are predicted to be editor's choice with a 73% accuracy.
+
+<hr style='border: 1px solid #333;'>
+
+### 1.c.
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk makes new training and test data with specified split:*</p>
+```{r, message=FALSE}
+# setting new test and train data sets with 33% in the test data
+
+# setting different random seed
+set.seed(2) 
+
+# making new training data
+train_1c_c = dogs %>%
+  select(c('grooming_needs', 'playfulness', 'protectiveness', 'barking', 'popularity', 'factor_editors_choice')) %>%
+  sample_frac(0.67) 
+
+# making new test data
+test_1c_c = dogs %>%
+  select(c('grooming_needs', 'playfulness', 'protectiveness', 'barking', 'popularity', 'factor_editors_choice')) %>%
+  anti_join(., train_1c_c)
+```
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk generates decision tree with new split:*</p>
+```{r, warning=FALSE}
+# creating new decision tree with training data
+tree_1c_c = caret::train(
+  x = train_1c_c[, c('grooming_needs', 
+               'playfulness', 
+               'protectiveness',
+               'barking',
+               'popularity')],
+  y = train_1c_c$factor_editors_choice,
+  method = 'rpart',
+  trControl = ctrl_1a,
+  tuneLength=10,
+  control = rpart::rpart.control(minbucket = 10)
+  )
+```
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk generates confusion matrix and accuracy value for decision tree:*</p>
+```{r}
+# getting out of sample predictions
+predictions_1c_c = predict(tree_1c_c, newdata = test_1c_c)
+
+# making a confusion matrix
+confusion_mat = confusionMatrix(predictions_1c_c, reference = test_1c_c$factor_editors_choice)
+
+# Print the confusion matrix
+print(confusion_mat)
+as.table(confusion_mat)
+
+
+# printing accuracy
+accuracy = confusion_mat$overall['Accuracy']
+cat('Overall Accuracy:', accuracy, '\n')
+```
+
+<hr style='border: 1px solid #333;'>
+
+### 1.d.
+Could look for optimal split by looping through different splits in different seeds but not much benefit and finding the optimal split for one seed creates artificial accuracy, that is not reproducible. 
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk generates new training and test data with different split:*</p>
+```{r, message=FALSE}
+set.seed(3) # different random seed
+
+# remaking train and test data with 50-50 split
+train_1d_c = dogs %>%
+  select(c('grooming_needs', 'playfulness', 'protectiveness', 'barking', 'popularity', 'factor_editors_choice')) %>%
+  sample_frac(0.8) # small data set so using 60-40 split so that test data isnt too small
+
+  
+test_1d_c = dogs %>%
+  select(c('grooming_needs', 'playfulness', 'protectiveness', 'barking', 'popularity', 'factor_editors_choice')) %>%
+  anti_join(., train_1c_c)
+```
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk regenerates decision tree with new test and train split:*</p>
+```{r, warning=FALSE}
+# recreating decision tree with new split
+# creating new decision tree with training data
+tree_1d_c = caret::train(
+  x = train_1d_c[, c('grooming_needs', 
+               'playfulness', 
+               'protectiveness',
+               'barking',
+               'popularity')],
+  y = train_1d_c$factor_editors_choice,
+  method = 'rpart',
+  trControl = ctrl_1a,
+  tuneLength=10,
+  control = rpart::rpart.control(minbucket = 10)
+  )
+```
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk prints confusion matrix and accuracy for new decision tree:*</p>
+```{r}
+# getting out of sample predictions
+predictions_1d_c = predict(tree_1d_c, newdata = test_1d_c)
+
+# making a confusion matrix
+confusion_mat_1d = confusionMatrix(predictions_1d_c, reference = test_1d_c$factor_editors_choice)
+
+# Print the confusion matrix
+#print(confusion_mat_1d)
+as.table(confusion_mat_1d)
+
+# printing accuracy
+accuracy_1d = confusion_mat_1d$overall['Accuracy']
+cat('Overall Accuracy for 1d:', accuracy_1d, '\n')
+
+#printing consuion matrix from 1c
+as.table(confusion_mat)
+# printing accuracy from 1c
+cat('Overall Accuracy for 1c:', accuracy, '\n')
+```
+
+Accuracy is slightly better although this could be seed dependent. The biggest difference is with the larger test size there are now preditions in all four quadrants of the confusion matrix. This is positive since we are interested in predicts whether or not a dog is an editor's choice, not only one side. 
+
+<hr style='border: 1px solid #333;'>
+
+### 1.e.
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk generates predictions for the whole data set from the decision tree:*</p>
+```{r}
+# Getting predictions for whole dogs data set from tree_1d_c
+predictions_1e_c = predict(tree_1d_c, newdata = dogs)
+
+# add predictions from tree_1d_c to dogs
+dogs$predictions_1e_c = predictions_1e_c
+```
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk prints table of the average popularity for each prediction type:*</p>
+```{r, message=FALSE}
+# grouping by 
+table_1e_c = dogs %>%
+  group_by(editors_choice, predictions_1e_c) %>%
+  summarize(AveragePopularity = mean(popularity)) %>%
+  mutate(PredictionType = case_when(
+    editors_choice == 0 & predictions_1e_c == 'X0' ~ 'True Negative',
+    editors_choice == 0 & predictions_1e_c == 'X1' ~ 'False Positive',
+    editors_choice == 1 & predictions_1e_c == 'X0' ~ 'False Negative',
+    editors_choice == 1 & predictions_1e_c == 'X1' ~ 'True Positive'
+  )) 
+
+table_1e_c %>%
+  kable(., 
+      caption = NULL,
+      col.names = c('Observed Choice', 'Predicted Value', 'Average Popularity', 'Prediction Type'),
+      align = 'c',  # Center-align columns
+      format = 'html',
+      table.attr = 'style="width:60%;margin:auto;"'  # centres table in page
+      ) %>%
+  kable_styling(bootstrap_options = c('bordered'))
+```
+
+The dogs that are predicted to be editor's choice have a high average popularity (>0.92). This is true for false positives and true positives. The false positives having the same average popularity as the true positives indicates popularity might be overused as a predictor. However, false negatives have a higher average popularity than true negatives which tells us the model is not only assigning its predictions based on popularity or else all lower popularity dogs would be predicted as no editor's choice.  The model may not be flexible enough to find the non-linear relationships between the variables. Furthermore, the variability of the data and small sample size make it difficult for the model to be highly trained.
+
+Note: it is not suprising that the model relies heavily on popluarity since the other features were selected for predicting popluarity. 
+
+<hr style='border: 1px solid #333;'>
+
+### 2.a.
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk generates a logistic regression model:*</p>
+```{r, warning=FALSE}
+# fitting logistic regression
+ctrl_2a = trainControl(method = 'cv', number = 5, classProbs = TRUE, summaryFunction = twoClassSummary)
+# check if can use the same ctrl as above
+
+# Train the logistic regression model using caret::train()
+log_reg_model = train(x = train_1d_c[, c('grooming_needs', # using the same training data as 1d
+               'playfulness', 
+               'protectiveness',
+               'barking',
+               'popularity')],
+  y = train_1d_c$factor_editors_choice,
+                       method = 'glm',
+                       trControl = ctrl_2a,
+                       family = binomial() # along with glm this sets the model to be logistic regression
+  )
+log_reg_model
+```
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk prints confusion matrix and model accuracy for the logistic regression model:*</p>
+```{r}
+# generating predictions to get confusion matrix
+predictions_2a_c = predict(log_reg_model, newdata = test_1d_c)
+
+# making confusion matrix
+confusion_mat_2a_c = confusionMatrix(predictions_2a_c, reference = test_1d_c$factor_editors_choice)
+
+# Print the confusion matrix
+#print(confusion_mat_2a_c)
+as.table(confusion_mat_2a_c)
+
+# printing accuracy
+accuracy_2a_c = confusion_mat_2a_c$overall['Accuracy']
+cat('Overall Accuracy for 2a:', accuracy_2a_c, '\n')
+cat('\n')
+cat('\n')
+
+# printing confusion matrix of 1d
+as.table(confusion_mat_1d)
+# printing accuracy of 1d
+cat('Overall Accuracy for 1d:', accuracy_1d, '\n')
+```
+
+The accuracies of the model are similar however the decision tree was higher. Given a decision tree interpretability of a decision tree, it is the preferred model in this case. 
+
+<hr style='border: 1px solid #333;'>
+
+### 2.b.
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk regenerates logistic regression using bootstrapping method (instead of cross validation):*</p>
+```{r, warning = FALSE}
+# setting bootstrap control method
+ctrl_boot_c = trainControl(method = 'boot', number = 1000) # 1000 bootstraps
+
+# training logistic regression models with bootstrap resampling
+log_reg_boot = train(x = train_1d_c[, c('grooming_needs', 'playfulness', 'protectiveness', 'barking', 'popularity')],
+                          y = train_1d_c$factor_editors_choice,
+                          method = 'glm',
+                          trControl = ctrl_boot_c,
+                          family = binomial())
+log_reg_boot
+
+
+```
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk prints range of accuracies of bootstrap logistric regression models:*</p>
+```{r}
+# getting out of sample predictions
+predictions_2b_c = predict(log_reg_boot, newdata = test_1d_c)
+
+# printing confusion matrix
+confusion_mat_2b_c = confusionMatrix(predictions_2b_c, reference = test_1d_c$factor_editors_choice)
+
+# print(confusion_mat_2b_c)
+as.table(confusion_mat_2b_c)
+
+
+# getting accuracies for every bootstrap iteration
+boot_accuracies = log_reg_boot$resample$Accuracy
+
+# Print the range of accuracies
+cat('Range of logistic regression bootstrap accuracies: ', min(boot_accuracies), '-', max(boot_accuracies), '\n')
+```
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk generates histogram of bootsrapped logistic regression accuracies:*</p>
+```{r, fig.align='center', warning = FALSE}
+# plotting accuracies for bootstrap
+ggplot(data.frame(Accuracy = boot_accuracies), aes(x = Accuracy)) +
+  geom_histogram(binwidth = 0.02, 
+                 fill = 'skyblue', 
+                 color = 'black', 
+                 alpha = 0.5) +
+  labs(title = 'Distribution of Bootstrapped Accuracies',
+       x = 'Accuracy',
+       y = 'Frequency') +
+    geom_vline(xintercept = 0.703125, 
+               linetype = "dashed", 
+               color = "orange",
+               size = 1.2) +  # line to show accuracy of log_reg_model
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+The accuracy of the model from 2a (log_reg_model) is denoted by the dashed orange line and falls within the expected accuracies of the bootstrapped models, although slightly below average. This would not usually be expected since the range of bootstrapped accuracies should generally fall lower than the final model. This reflects that the original model might not perform very well. 
+
+<hr style='border: 1px solid #333;'>
+
+### 3.
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk fits random forest model:*</p>
+```{r, warning=FALSE}
+randfor_3 = train(x = train_1d_c[, c('grooming_needs', 
+                                     'playfulness', 
+                                     'protectiveness', 
+                                     'barking', 
+                                     'popularity')],
+                  y = train_1d_c$factor_editors_choice,
+                  method = 'rf',
+                  trControl = ctrl 
+                  )
+randfor_3
+```
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk prints confusion matrix and accuracy for random forest model:*</p>
+```{r}
+# getting predictions for out of sample accuracy
+predictions_3_c = predict(randfor_3, newdata = test_1d_c)
+
+# making confusion matrix
+confusion_mat_3_c = confusionMatrix(predictions_3_c, reference = test_1d_c$factor_editors_choice)
+
+# Print the confusion matrix
+print(confusion_mat_3_c)
+as.table(confusion_mat_3_c)
+
+# printing accuracy
+accuracy_3_c = confusion_mat_3_c$overall['Accuracy']
+cat('Overall Accuracy:', accuracy_3_c, '\n')
+```
+
+Since the bootstrapped model above performed better, I am testing to see if a bootstrapped approach to the random forest will help too.
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk recreates random forest model using bootstrapping (instead of cross validation):*</p>
+```{r, warning=FALSE}
+# trying again with bootstrapping method
+randfor_3_boot = train(x = train_1d_c[, c('grooming_needs', 
+                                          'playfulness', 
+                                          'protectiveness', 
+                                          'barking', 
+                                          'popularity')],
+                  y = train_1d_c$factor_editors_choice,
+                  method = 'rf',
+                  trControl = ctrl_boot_c # using bootstrap method now
+                  )
+```
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk confusion matrix and accuracy of bootstrapped random forest model:*</p>
+```{r}
+# getting predictions for out of sample accuracy
+predictions_3_boot = predict(randfor_3_boot, newdata = test_1d_c)
+
+# making confusion matrix
+confusion_mat_3_boot = confusionMatrix(predictions_3_boot, reference = test_1d_c$factor_editors_choice)
+
+# Print the confusion matrix
+#print(confusion_mat_3_boot)
+as.table(confusion_mat_3_boot)
+
+# printing accuracy
+accuracy_3_boot = confusion_mat_3_boot$overall['Accuracy']
+cat('Overall Accuracy:', accuracy_3_boot, '\n')
+```
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk prints all previous confusion matracies and associated model accuracies:*</p>
+```{r}
+# reprinting all the confusion matracies:
+
+# decision tree (33/67)
+cat('decision tree (33/67):','\n')
+as.table(confusion_mat)
+cat('Overall Accuracy:', accuracy, '\n')
+cat('\n') # aadds line break for clearer printing
+cat('\n')
+
+# decision tree (50/50 split)
+cat('decision tree (50/50):','\n')
+as.table(confusion_mat_1d)
+cat('Overall Accuracy:', accuracy_1d, '\n')
+cat('\n')
+cat('\n')
+
+# logistic regression
+cat('logistic regression:','\n')
+as.table(confusion_mat_2a_c)
+cat('Overall Accuracy:', accuracy_2a_c, '\n')
+cat('\n')
+cat('\n')
+
+# random forest (cross validated)
+cat('random forest (cross validated):','\n')
+as.table(confusion_mat_3_c)
+cat('Overall Accuracy:', accuracy_3_c, '\n')
+cat('\n')
+cat('\n')
+
+# random forest (bootstrapped)
+cat('random forest (bootstrapped):','\n')
+as.table(confusion_mat_3_boot)
+cat('Overall Accuracy:', accuracy_3_boot, '\n')
+
+```
+
+The random forest models performed the best by far in terms of accuracy. Notably the main improvement appears to be the correct prediction of true positives, which the other models struggled with. This indicates the random forest model was able to better capture the non-linear relationship between these variables and whether or not a dog is an editors choice.
+
+Note: the variables used here were selected for predicting popularity so the results could have been improved if feature selection had been done with editor choice prediction in mind.  
+
+
+<hr style='border: 1px solid #333;'>
+
+### 4.a 
+
+The models with the highest accuracy (0.89) were the two random forest models. Since the cross validated model was considerably less computationally intensive to generate, it is the preferred model for classifying if a dog is an editors choice or not. 
+
+This model was constructed using 5 fold cross validation to improve its out of sample predictive reliability. 
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk prints accuracies of each fold in the random forest model cross validation:*</p>
+```{r}
+# printing the accuracies of the 5 folds in randfor_3
+cat(randfor_3$resample$Accuracy, sep = "\n")
+```
+Clearly the cross validation method was effective since the accuracies of each individual fold was lower (0.63 - 0.81). This is expected since each fold is not trained on the whole data. The range of accuracies was large because the data set was small and therefore any subsetting of this can cause significant random deviation.
+
+The final accuracy is somewhat relaible due to the 5 fold cross validation and that is was equal to the bootstrapping method. However, it is highly variable under subsetting of the data 
+
+<hr style='border: 1px solid #333;'>
+
+### 4.b.
+
+<p class='text-right' style='background-color: #f5fbff'>*Code chunk prints accuracies of each fold in the decision tree model cross validation:*</p>
+```{r, warning = FALSE}
+# Accuracy is not a default output of rpart trees so calculating accuracies per fold.
+
+# setting control so that i can get results per fold
+ctrl_4_c <- trainControl(
+  method = 'cv',
+  number = 5,
+  index = createFolds(train_1d_c$factor_editors_choice, k = 5),
+  verboseIter = FALSE
+)
+
+# making empty list to store confusion matrices
+confusion_matrices <- list()
+
+# looping through each fold
+for (i in seq_along(ctrl_4_c$index)) {
+  
+  # getting train and test for every fold
+  train_indices <- ctrl_4_c$index[[i]]
+  test_indices <- setdiff(1:nrow(train_1d_c), train_indices)
+  
+  # Create training and testing datasets
+  train_4_c <- train_1d_c[train_indices, ]
+  test_4_c <- train_1d_c[test_indices, ]
+  
+  # Train the model on the current fold
+  tree_1d_c_fold <- train(
+    x = train_4_c[, c('grooming_needs', 
+                       'playfulness', 
+                       'protectiveness', 
+                       'barking', 
+                       'popularity')],
+    y = factor(train_4_c$factor_editors_choice, 
+               levels = levels(train_1d_c$factor_editors_choice)),
+    method = "rpart",
+    trControl = ctrl_4_c,
+    tuneLength = 5
+  )
+  
+  # making predictions for current fold
+  predictions <- predict(tree_1d_c_fold, newdata = test_4_c)
+  # making sure predictions is as a factor
+  predictions <- factor(predictions, levels = levels(train_1d_c$factor_editors_choice))
+  
+  # making the confusion matrices
+  confusion_matrix <- confusionMatrix(predictions, reference = test_4_c$factor_editors_choice)
+  
+  # storing confusion matrices in the list
+  confusion_matrices[[i]] = confusion_matrix
+}
+
+# printing all confusion matrices (gives accuracy)
+for (i in seq_along(confusion_matrices)) {
+  cat("Confusion Matrix for Fold", i, ":\n")
+  print(confusion_matrices[[i]])
+  cat("\n")
+}
+```
+
+NOTE: The 'rpart' method in caret::train() does not automatically calculate accuracy when cross validating the model so above I have retrained the decision tree model in a 5 fold cross validation method and the associated accuracies and confusion matrices have been printed. These should be the same as the cross validation models ran in question 1.d. since the random seed has not been altered. 
+
+The accuracies of the decision tree model folds are extremely similar (0.7339 - 0.7398) which implies the decision tree's results are highly reliable. Significantly more reliable than the random forest model where the fold accuraccies were between 0.6333 and 0.8065. 
+
+Model selection depends on the goal:
+
+- The out-sample-accuracy for the random forest model (randfor_3) was 0.89 and the out-sample-accuracy for the decision tree model (tree_1d_c) was 0.75 so if the most accurate out-of-sample predictions is the goal then randfor_3 should be selected. 
+- However, if the goal is risk mitigation then, due to the more flexible nature of random forest models, tree_1d_c should be selected as the cross validation fold accuracies were significantly more similar.
+
