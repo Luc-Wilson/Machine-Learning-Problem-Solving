@@ -11,11 +11,6 @@ output:
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-```{r}
-# setting working directoty
-#setwd('C:/Users/ni20171/OneDrive - University of Bristol/Msc Geographic Data Science & Spatial #Analytics/Machine Learning/MidTerm')
-```
-
 <p class='text-right' style='background-color: #f5fbff'>*Code chunk loads required libraries:*</p>
 ```{r, warning = FALSE, message = FALSE}
 # loading required packages
